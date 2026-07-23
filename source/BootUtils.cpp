@@ -13,9 +13,9 @@
 #include <malloc.h>
 #include <memory>
 #include <mocha/mocha.h>
+#include <coreinit/title.h>
 #include <nn/act.h>
 #include <nn/cmpt/cmpt.h>
-#include <nsysccr/cdc.h>
 #include <padscore/kpad.h>
 #include <padscore/wpad.h>
 #include <sndcore2/core.h>
@@ -31,6 +31,7 @@ extern "C" int32_t CMPTAcctGetPcConf(uint32_t outConf[3]);
 extern "C" int32_t CMPTAcctSetPcConf(uint32_t conf[3]);
 extern "C" int32_t CMPTAcctGetScreenType(CmptScreenType *outType);
 extern "C" int32_t CMPTAcctGetDrcCtrlEnabled(int32_t *outEnabled);
+extern "C" int32_t CMPTInitSystem();
 
 void handleAccountSelection();
 
@@ -147,6 +148,15 @@ static void launchvWiiTitle(uint64_t titleId) {
     KPADInit();
 
     diagLog("--- launching vWii title %016llx", (unsigned long long) titleId);
+    diagLog("running under title %016llx", (unsigned long long) OSGetTitleID());
+
+    // CMPT normally runs from the Wii U Menu, which initializes the compat
+    // system during its own startup. This module launches vWii much earlier,
+    // so initialize it ourselves - without this the TV-only launch fails with
+    // -512 when no GamePad is attached (hbl2hbc notes "CMPT only seems to work
+    // properly from system menu").
+    int32_t initRc = CMPTInitSystem();
+    diagLog("CMPTInitSystem() = %d", initRc);
 
     // CMPT reads the vWii settings of the current account, so make sure the
     // default account is loaded - unlike the Wii U Menu launch path, nothing
@@ -222,25 +232,6 @@ static void launchvWiiTitle(uint64_t titleId) {
                 diagLog("CMPTAcctSetScreenType(TV) = %d", rc);
             }
         }
-    }
-
-    // A failed CMPTLaunch poisons the CMPT state (later attempts fail with
-    // -9 immediately), so retrying is pointless - instead wait BEFORE the
-    // first attempt: the theory is that the launch only fails while IOS-PAD
-    // is still searching for the GamePad after a cold boot. Probe the DRC
-    // state while waiting to see if/when the subsystem settles.
-    if (!gamePadAttached) {
-        OSTime waitEnd = OSGetSystemTime() + OSMillisecondsToTicks(120000);
-        for (int32_t i = 0; OSGetSystemTime() < waitEnd; i++) {
-            CCRCDCDrcState drcState = {};
-            int32_t src             = CCRCDCSysGetDrcState(CCR_CDC_DESTINATION_DRC0, &drcState);
-            diagLog("wait %d: CCRCDCSysGetDrcState(DRC0) = %d (state %d)", i, src, drcState.state);
-            OSSleepTicks(OSMillisecondsToTicks(6000));
-        }
-        int32_t pingRc = CCRCDCDevicePing(CCR_CDC_DESTINATION_DRH);
-        diagLog("CCRCDCDevicePing(DRH) = %d", pingRc);
-        pingRc = CCRCDCDevicePing(CCR_CDC_DESTINATION_DRC0);
-        diagLog("CCRCDCDevicePing(DRC0) = %d", pingRc);
     }
 
     uint32_t dataSize = 0;
