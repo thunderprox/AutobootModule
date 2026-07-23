@@ -15,6 +15,7 @@
 #include <mocha/mocha.h>
 #include <nn/act.h>
 #include <nn/cmpt/cmpt.h>
+#include <nsysccr/cdc.h>
 #include <padscore/kpad.h>
 #include <padscore/wpad.h>
 #include <sndcore2/core.h>
@@ -223,6 +224,24 @@ static void launchvWiiTitle(uint64_t titleId) {
         }
     }
 
+    // A failed CMPTLaunch poisons the CMPT state (later attempts fail with
+    // -9 immediately), so retrying is pointless - instead wait BEFORE the
+    // first attempt: the theory is that the launch only fails while IOS-PAD
+    // is still searching for the GamePad after a cold boot. Probe the DRC
+    // state while waiting to see if/when the subsystem settles.
+    if (!gamePadAttached) {
+        for (int32_t i = 0; i < 10; i++) {
+            CCRCDCDrcState drcState = {};
+            int32_t src             = CCRCDCSysGetDrcState(CCR_CDC_DESTINATION_DRC0, &drcState);
+            diagLog("wait %d: CCRCDCSysGetDrcState(DRC0) = %d (state %d)", i, src, drcState.state);
+            OSSleepTicks(OSMillisecondsToTicks(3000));
+        }
+        int32_t pingRc = CCRCDCDevicePing(CCR_CDC_DESTINATION_DRH);
+        diagLog("CCRCDCDevicePing(DRH) = %d", pingRc);
+        pingRc = CCRCDCDevicePing(CCR_CDC_DESTINATION_DRC0);
+        diagLog("CCRCDCDevicePing(DRC0) = %d", pingRc);
+    }
+
     uint32_t dataSize = 0;
     rc                = CMPTGetDataSize(&dataSize);
     diagLog("CMPTGetDataSize() = %d, dataSize = %u", rc, dataSize);
@@ -241,18 +260,6 @@ static void launchvWiiTitle(uint64_t titleId) {
         rc = CMPTLaunchTitle(dataBuffer, dataSize, titleId);
     }
     diagLog("CMPTLaunch returned %d", rc);
-
-    // The TV-only launch can fail this early after a cold boot while the
-    // GamePad subsystem is still settling - the same launch succeeds from
-    // the Wii U Menu much later. Retry a few times with a delay.
-    if (rc < 0 && !gamePadAttached) {
-        for (int32_t attempt = 1; attempt <= 5 && rc < 0; attempt++) {
-            diagLog("launch failed, retrying in 3s (attempt %d/5)", attempt);
-            OSSleepTicks(OSMillisecondsToTicks(3000));
-            rc = titleId == 0 ? CMPTLaunchMenu(dataBuffer, dataSize) : CMPTLaunchTitle(dataBuffer, dataSize, titleId);
-            diagLog("retry %d: CMPTLaunch returned %d", attempt, rc);
-        }
-    }
 
     free(dataBuffer);
 }
