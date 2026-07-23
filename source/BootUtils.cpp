@@ -5,6 +5,8 @@
 #include <codecvt>
 #include <coreinit/filesystem_fsa.h>
 #include <coreinit/thread.h>
+#include <cstdarg>
+#include <cstdio>
 #include <coreinit/time.h>
 #include <filesystem>
 #include <locale>
@@ -88,6 +90,27 @@ void handleAccountSelection() {
     nn::act::Finalize();
 }
 
+#ifdef DEBUG
+// Appends diagnostics to a log file on the sd card which can be read on a PC,
+// since the console may freeze or reboot into vWii mode during the launch.
+static void diagLog(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+static void diagLog(const char *fmt, ...) {
+    FILE *f = fopen("fs:/vol/external01/wiiu/autoboot_diag.log", "a");
+    if (!f) {
+        return;
+    }
+    fprintf(f, "[%llu ms] ", (unsigned long long) OSTicksToMilliseconds(OSGetSystemTime()));
+    va_list args;
+    va_start(args, fmt);
+    vfprintf(f, fmt, args);
+    va_end(args);
+    fputs("\n", f);
+    fclose(f);
+}
+#else
+static inline void diagLog(const char *, ...) {}
+#endif
+
 static bool isGamePadAttached() {
     // A connected GamePad streams input samples continuously, so only a
     // successful read proves it's attached. Retry on VPAD_READ_NO_SAMPLES
@@ -99,12 +122,14 @@ static bool isGamePadAttached() {
         VPADStatus status = {};
         if (VPADRead(VPAD_CHAN_0, &status, 1, &error) > 0 && error == VPAD_READ_SUCCESS) {
             DEBUG_FUNCTION_LINE("GamePad is attached");
+            diagLog("GamePad is attached (attempts left %d)", maxAttempts);
             return true;
         }
         OSSleepTicks(OSMillisecondsToTicks(1));
     } while (--maxAttempts > 0 && error == VPAD_READ_NO_SAMPLES);
 
     DEBUG_FUNCTION_LINE("GamePad is not attached (VPADRead error %d)", error);
+    diagLog("GamePad is not attached (VPADRead error %d, attempts left %d)", error, maxAttempts);
     return false;
 }
 
@@ -112,36 +137,49 @@ static void launchvWiiTitle(uint64_t titleId) {
     // we need to init kpad for cmpt
     KPADInit();
 
+    diagLog("--- launching vWii title %016llx", (unsigned long long) titleId);
+
     // Try to find a screen type that works
+    int32_t rc;
     if (!isGamePadAttached()) {
         // CMPTCheckScreenState only checks the video output configuration, so
         // it accepts CMPT_SCREEN_TYPE_BOTH even without a GamePad attached,
         // which freezes the console on launch. Force TV-only in that case.
         DEBUG_FUNCTION_LINE("No GamePad attached, using CMPT_SCREEN_TYPE_TV");
-        CMPTAcctSetScreenType(CMPT_SCREEN_TYPE_TV);
+        rc = CMPTAcctSetScreenType(CMPT_SCREEN_TYPE_TV);
+        diagLog("CMPTAcctSetScreenType(TV) = %d", rc);
     } else {
         DEBUG_FUNCTION_LINE("Using CMPT_SCREEN_TYPE_BOTH");
-        CMPTAcctSetScreenType(CMPT_SCREEN_TYPE_BOTH);
-        if (CMPTCheckScreenState() < 0) {
+        rc = CMPTAcctSetScreenType(CMPT_SCREEN_TYPE_BOTH);
+        diagLog("CMPTAcctSetScreenType(BOTH) = %d", rc);
+        if ((rc = CMPTCheckScreenState()) < 0) {
+            diagLog("CMPTCheckScreenState() = %d, falling back to DRC", rc);
             DEBUG_FUNCTION_LINE("Falling back to CMPT_SCREEN_TYPE_DRC");
-            CMPTAcctSetScreenType(CMPT_SCREEN_TYPE_DRC);
-            if (CMPTCheckScreenState() < 0) {
+            rc = CMPTAcctSetScreenType(CMPT_SCREEN_TYPE_DRC);
+            diagLog("CMPTAcctSetScreenType(DRC) = %d", rc);
+            if ((rc = CMPTCheckScreenState()) < 0) {
+                diagLog("CMPTCheckScreenState() = %d, falling back to TV", rc);
                 DEBUG_FUNCTION_LINE("Falling back to CMPT_SCREEN_TYPE_TV");
-                CMPTAcctSetScreenType(CMPT_SCREEN_TYPE_TV);
+                rc = CMPTAcctSetScreenType(CMPT_SCREEN_TYPE_TV);
+                diagLog("CMPTAcctSetScreenType(TV) = %d", rc);
             }
         }
     }
 
     uint32_t dataSize = 0;
-    CMPTGetDataSize(&dataSize);
+    rc                = CMPTGetDataSize(&dataSize);
+    diagLog("CMPTGetDataSize() = %d, dataSize = %u", rc, dataSize);
 
     void *dataBuffer = memalign(0x40, dataSize);
 
     if (titleId == 0) {
-        CMPTLaunchMenu(dataBuffer, dataSize);
+        diagLog("calling CMPTLaunchMenu");
+        rc = CMPTLaunchMenu(dataBuffer, dataSize);
     } else {
-        CMPTLaunchTitle(dataBuffer, dataSize, titleId);
+        diagLog("calling CMPTLaunchTitle");
+        rc = CMPTLaunchTitle(dataBuffer, dataSize, titleId);
     }
+    diagLog("CMPTLaunch returned %d", rc);
 
     free(dataBuffer);
 }
