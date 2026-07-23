@@ -16,6 +16,7 @@
 #include <nn/act.h>
 #include <nn/cmpt/cmpt.h>
 #include <padscore/kpad.h>
+#include <padscore/wpad.h>
 #include <sndcore2/core.h>
 #include <string>
 #include <sysapp/launch.h>
@@ -170,6 +171,14 @@ static void launchvWiiTitle(uint64_t titleId) {
         diagLog("CMPTAcctSetPcConf(defaults) = %d", rc);
         rc = CMPTAcctGetPcConf(pcConf);
         diagLog("CMPTAcctGetPcConf() retry = %d (rating %u, org %u, flags %u)", rc, pcConf[0], pcConf[1], pcConf[2]);
+    }
+
+    // Log which wiimote channels are connected - CMPT might require a
+    // usable vWii input device for a TV-only launch.
+    for (int32_t i = 0; i < 4; i++) {
+        WPADExtensionType ext{};
+        rc = WPADProbe((WPADChan) i, &ext);
+        diagLog("WPADProbe(%d) = %d (ext %d)", i, rc, ext);
     }
 
     // Try to find a screen type that works
