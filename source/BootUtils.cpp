@@ -4,6 +4,8 @@
 #include "logger.h"
 #include <codecvt>
 #include <coreinit/filesystem_fsa.h>
+#include <coreinit/thread.h>
+#include <coreinit/time.h>
 #include <filesystem>
 #include <locale>
 #include <malloc.h>
@@ -17,6 +19,7 @@
 #include <sysapp/launch.h>
 #include <sysapp/title.h>
 #include <vector>
+#include <vpad/input.h>
 
 void handleAccountSelection();
 
@@ -85,16 +88,49 @@ void handleAccountSelection() {
     nn::act::Finalize();
 }
 
+static bool isGamePadAttached() {
+    // If the console was powered on with the GamePad it might still be
+    // connecting at this point, so poll for a moment before treating it as
+    // disconnected.
+    VPADReadError error = VPAD_READ_UNINITIALIZED;
+    OSTime deadline     = OSGetTime() + OSMillisecondsToTicks(2000);
+    do {
+        VPADStatus status = {};
+        VPADRead(VPAD_CHAN_0, &status, 1, &error);
+        // VPAD_READ_NO_SAMPLES means the GamePad is attached but has no new
+        // samples yet, only VPAD_READ_INVALID_CONTROLLER means it's not there.
+        if (error == VPAD_READ_SUCCESS || error == VPAD_READ_NO_SAMPLES) {
+            DEBUG_FUNCTION_LINE("GamePad is attached (VPADRead error %d)", error);
+            return true;
+        }
+        OSSleepTicks(OSMillisecondsToTicks(50));
+    } while (OSGetTime() < deadline);
+
+    DEBUG_FUNCTION_LINE("GamePad is not attached (VPADRead error %d)", error);
+    return false;
+}
+
 static void launchvWiiTitle(uint64_t titleId) {
     // we need to init kpad for cmpt
     KPADInit();
 
     // Try to find a screen type that works
-    CMPTAcctSetScreenType(CMPT_SCREEN_TYPE_BOTH);
-    if (CMPTCheckScreenState() < 0) {
-        CMPTAcctSetScreenType(CMPT_SCREEN_TYPE_DRC);
+    if (!isGamePadAttached()) {
+        // CMPTCheckScreenState only checks the video output configuration, so
+        // it accepts CMPT_SCREEN_TYPE_BOTH even without a GamePad attached,
+        // which freezes the console on launch. Force TV-only in that case.
+        DEBUG_FUNCTION_LINE("No GamePad attached, using CMPT_SCREEN_TYPE_TV");
+        CMPTAcctSetScreenType(CMPT_SCREEN_TYPE_TV);
+    } else {
+        DEBUG_FUNCTION_LINE("Using CMPT_SCREEN_TYPE_BOTH");
+        CMPTAcctSetScreenType(CMPT_SCREEN_TYPE_BOTH);
         if (CMPTCheckScreenState() < 0) {
-            CMPTAcctSetScreenType(CMPT_SCREEN_TYPE_TV);
+            DEBUG_FUNCTION_LINE("Falling back to CMPT_SCREEN_TYPE_DRC");
+            CMPTAcctSetScreenType(CMPT_SCREEN_TYPE_DRC);
+            if (CMPTCheckScreenState() < 0) {
+                DEBUG_FUNCTION_LINE("Falling back to CMPT_SCREEN_TYPE_TV");
+                CMPTAcctSetScreenType(CMPT_SCREEN_TYPE_TV);
+            }
         }
     }
 
