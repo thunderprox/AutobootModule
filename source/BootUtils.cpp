@@ -23,6 +23,9 @@
 #include <vector>
 #include <vpad/input.h>
 
+// Exported by nn_cmpt.rpl but not declared in wut's nn/cmpt/cmpt.h
+extern "C" int32_t CMPTAcctSetDrcCtrlEnabled(int32_t enable);
+
 void handleAccountSelection();
 
 void bootWiiUMenu() {
@@ -148,8 +151,14 @@ static void launchvWiiTitle(uint64_t titleId) {
         DEBUG_FUNCTION_LINE("No GamePad attached, using CMPT_SCREEN_TYPE_TV");
         rc = CMPTAcctSetScreenType(CMPT_SCREEN_TYPE_TV);
         diagLog("CMPTAcctSetScreenType(TV) = %d", rc);
+        rc = CMPTAcctSetDrcCtrlEnabled(0);
+        diagLog("CMPTAcctSetDrcCtrlEnabled(0) = %d", rc);
+        rc = CMPTCheckScreenState();
+        diagLog("CMPTCheckScreenState() = %d", rc);
     } else {
         DEBUG_FUNCTION_LINE("Using CMPT_SCREEN_TYPE_BOTH");
+        rc = CMPTAcctSetDrcCtrlEnabled(1);
+        diagLog("CMPTAcctSetDrcCtrlEnabled(1) = %d", rc);
         rc = CMPTAcctSetScreenType(CMPT_SCREEN_TYPE_BOTH);
         diagLog("CMPTAcctSetScreenType(BOTH) = %d", rc);
         if ((rc = CMPTCheckScreenState()) < 0) {
@@ -171,6 +180,10 @@ static void launchvWiiTitle(uint64_t titleId) {
     diagLog("CMPTGetDataSize() = %d, dataSize = %u", rc, dataSize);
 
     void *dataBuffer = memalign(0x40, dataSize);
+    diagLog("dataBuffer = %p", dataBuffer);
+    if (!dataBuffer) {
+        DEBUG_FUNCTION_LINE_ERR("Failed to allocate vWii launch data buffer (%u bytes)", dataSize);
+    }
 
     if (titleId == 0) {
         diagLog("calling CMPTLaunchMenu");
