@@ -90,21 +90,19 @@ void handleAccountSelection() {
 
 static bool isGamePadAttached() {
     // A connected GamePad streams input samples continuously, so only a
-    // successful read proves it's attached. A paired but powered off GamePad
-    // can keep reporting VPAD_READ_NO_SAMPLES instead of
-    // VPAD_READ_INVALID_CONTROLLER, and if the console was powered on with
-    // the GamePad it might still be connecting at this point, so poll for a
-    // moment before treating it as disconnected.
+    // successful read proves it's attached. Retry on VPAD_READ_NO_SAMPLES
+    // like InputUtils::getControllerInput does, since it can also show up
+    // between two samples of a connected GamePad.
     VPADReadError error = VPAD_READ_UNINITIALIZED;
-    OSTime deadline     = OSGetTime() + OSMillisecondsToTicks(2000);
+    int maxAttempts     = 100;
     do {
         VPADStatus status = {};
         if (VPADRead(VPAD_CHAN_0, &status, 1, &error) > 0 && error == VPAD_READ_SUCCESS) {
             DEBUG_FUNCTION_LINE("GamePad is attached");
             return true;
         }
-        OSSleepTicks(OSMillisecondsToTicks(50));
-    } while (OSGetTime() < deadline);
+        OSSleepTicks(OSMillisecondsToTicks(1));
+    } while (--maxAttempts > 0 && error == VPAD_READ_NO_SAMPLES);
 
     DEBUG_FUNCTION_LINE("GamePad is not attached (VPADRead error %d)", error);
     return false;
