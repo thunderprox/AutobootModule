@@ -25,6 +25,8 @@
 
 // Exported by nn_cmpt.rpl but not declared in wut's nn/cmpt/cmpt.h
 extern "C" int32_t CMPTAcctSetDrcCtrlEnabled(int32_t enable);
+extern "C" int32_t CMPTAcctGetPcConf(uint32_t outConf[3]);
+extern "C" int32_t CMPTAcctSetPcConf(uint32_t conf[3]);
 
 void handleAccountSelection();
 
@@ -142,8 +144,35 @@ static void launchvWiiTitle(uint64_t titleId) {
 
     diagLog("--- launching vWii title %016llx", (unsigned long long) titleId);
 
+    // CMPT reads the vWii settings of the current account, so make sure the
+    // default account is loaded - unlike the Wii U Menu launch path, nothing
+    // has logged in an account at this point.
+    nn::act::Initialize();
+    nn::act::SlotNo slot        = nn::act::GetSlotNo();
+    nn::act::SlotNo defaultSlot = nn::act::GetDefaultAccount();
+    diagLog("act slot = %d, default slot = %d", slot, defaultSlot);
+    if (slot == 0 && defaultSlot != 0) {
+        auto result = nn::act::LoadConsoleAccount(defaultSlot, 0, nullptr, false);
+        diagLog("LoadConsoleAccount(%d) success = %d", defaultSlot, result.IsSuccess());
+    }
+    nn::act::Finalize();
+
+    // Probes whether CMPT can read the wii_acct user config entries - decaf
+    // documents -512 as CMPTError::UserConfigError.
+    uint32_t pcConf[3] = {};
+    int32_t rc         = CMPTAcctGetPcConf(pcConf);
+    diagLog("CMPTAcctGetPcConf() = %d (rating %u, org %u, flags %u)", rc, pcConf[0], pcConf[1], pcConf[2]);
+    if (rc < 0) {
+        // The entries are probably missing, try to create them with
+        // "no restrictions" defaults so the launch can read them.
+        uint32_t defaultPcConf[3] = {};
+        rc                        = CMPTAcctSetPcConf(defaultPcConf);
+        diagLog("CMPTAcctSetPcConf(defaults) = %d", rc);
+        rc = CMPTAcctGetPcConf(pcConf);
+        diagLog("CMPTAcctGetPcConf() retry = %d (rating %u, org %u, flags %u)", rc, pcConf[0], pcConf[1], pcConf[2]);
+    }
+
     // Try to find a screen type that works
-    int32_t rc;
     if (!isGamePadAttached()) {
         // CMPTCheckScreenState only checks the video output configuration, so
         // it accepts CMPT_SCREEN_TYPE_BOTH even without a GamePad attached,
