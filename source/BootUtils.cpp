@@ -191,20 +191,37 @@ static void launchvWiiTitle(uint64_t titleId) {
     rc              = CMPTAcctGetDrcCtrlEnabled(&drcCtrl);
     diagLog("CMPTAcctGetDrcCtrlEnabled() = %d (enabled %d)", rc, drcCtrl);
 
-    // DIAGNOSTIC EXPERIMENT: always try the TV-only launch first, even with
-    // a GamePad attached, to test whether CMPT accepts CMPT_SCREEN_TYPE_TV
-    // as long as the GamePad is reachable. The bisect fallbacks below will
-    // recover with DRC/BOTH if the launch fails.
+    // Try to find a screen type that works
     bool gamePadAttached = isGamePadAttached();
-    DEBUG_FUNCTION_LINE("Experiment: using CMPT_SCREEN_TYPE_TV (GamePad attached: %d)", gamePadAttached);
-    rc = CMPTAcctSetScreenType(CMPT_SCREEN_TYPE_TV);
-    diagLog("CMPTAcctSetScreenType(TV) = %d", rc);
-    rc = CMPTAcctGetScreenType(&curType);
-    diagLog("CMPTAcctGetScreenType() after set = %d (type %d)", rc, curType);
-    rc = CMPTAcctSetDrcCtrlEnabled(gamePadAttached ? 1 : 0);
-    diagLog("CMPTAcctSetDrcCtrlEnabled(%d) = %d", gamePadAttached ? 1 : 0, rc);
-    rc = CMPTCheckScreenState();
-    diagLog("CMPTCheckScreenState() = %d", rc);
+    if (!gamePadAttached) {
+        // A launch with a DRC screen type would hang without a GamePad, so
+        // force TV-only.
+        DEBUG_FUNCTION_LINE("No GamePad attached, using CMPT_SCREEN_TYPE_TV");
+        rc = CMPTAcctSetScreenType(CMPT_SCREEN_TYPE_TV);
+        diagLog("CMPTAcctSetScreenType(TV) = %d", rc);
+        rc = CMPTAcctSetDrcCtrlEnabled(0);
+        diagLog("CMPTAcctSetDrcCtrlEnabled(0) = %d", rc);
+        rc = CMPTCheckScreenState();
+        diagLog("CMPTCheckScreenState() = %d", rc);
+    } else {
+        DEBUG_FUNCTION_LINE("Using CMPT_SCREEN_TYPE_BOTH");
+        rc = CMPTAcctSetDrcCtrlEnabled(1);
+        diagLog("CMPTAcctSetDrcCtrlEnabled(1) = %d", rc);
+        rc = CMPTAcctSetScreenType(CMPT_SCREEN_TYPE_BOTH);
+        diagLog("CMPTAcctSetScreenType(BOTH) = %d", rc);
+        if ((rc = CMPTCheckScreenState()) < 0) {
+            diagLog("CMPTCheckScreenState() = %d, falling back to DRC", rc);
+            DEBUG_FUNCTION_LINE("Falling back to CMPT_SCREEN_TYPE_DRC");
+            rc = CMPTAcctSetScreenType(CMPT_SCREEN_TYPE_DRC);
+            diagLog("CMPTAcctSetScreenType(DRC) = %d", rc);
+            if ((rc = CMPTCheckScreenState()) < 0) {
+                diagLog("CMPTCheckScreenState() = %d, falling back to TV", rc);
+                DEBUG_FUNCTION_LINE("Falling back to CMPT_SCREEN_TYPE_TV");
+                rc = CMPTAcctSetScreenType(CMPT_SCREEN_TYPE_TV);
+                diagLog("CMPTAcctSetScreenType(TV) = %d", rc);
+            }
+        }
+    }
 
     uint32_t dataSize = 0;
     rc                = CMPTGetDataSize(&dataSize);
@@ -225,22 +242,15 @@ static void launchvWiiTitle(uint64_t titleId) {
     }
     diagLog("CMPTLaunch returned %d", rc);
 
-    // Diagnostics bisection: if the TV-only launch failed, retry with the
-    // other screen types to narrow down which value CMPT rejects. A
-    // succeeding retry will hang vWii on a grey screen without a GamePad -
-    // that hang is the expected "success" signal here.
-    if (rc < 0) {
-        rc = CMPTAcctSetScreenType(CMPT_SCREEN_TYPE_DRC);
-        diagLog("bisect: CMPTAcctSetScreenType(DRC) = %d", rc);
-        diagLog("bisect: calling CMPTLaunch with DRC");
-        rc = titleId == 0 ? CMPTLaunchMenu(dataBuffer, dataSize) : CMPTLaunchTitle(dataBuffer, dataSize, titleId);
-        diagLog("bisect: CMPTLaunch with DRC returned %d", rc);
-        if (rc < 0) {
-            rc = CMPTAcctSetScreenType(CMPT_SCREEN_TYPE_BOTH);
-            diagLog("bisect: CMPTAcctSetScreenType(BOTH) = %d", rc);
-            diagLog("bisect: calling CMPTLaunch with BOTH");
+    // The TV-only launch can fail this early after a cold boot while the
+    // GamePad subsystem is still settling - the same launch succeeds from
+    // the Wii U Menu much later. Retry a few times with a delay.
+    if (rc < 0 && !gamePadAttached) {
+        for (int32_t attempt = 1; attempt <= 5 && rc < 0; attempt++) {
+            diagLog("launch failed, retrying in 3s (attempt %d/5)", attempt);
+            OSSleepTicks(OSMillisecondsToTicks(3000));
             rc = titleId == 0 ? CMPTLaunchMenu(dataBuffer, dataSize) : CMPTLaunchTitle(dataBuffer, dataSize, titleId);
-            diagLog("bisect: CMPTLaunch with BOTH returned %d", rc);
+            diagLog("retry %d: CMPTLaunch returned %d", attempt, rc);
         }
     }
 
