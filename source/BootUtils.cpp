@@ -28,6 +28,8 @@
 extern "C" int32_t CMPTAcctSetDrcCtrlEnabled(int32_t enable);
 extern "C" int32_t CMPTAcctGetPcConf(uint32_t outConf[3]);
 extern "C" int32_t CMPTAcctSetPcConf(uint32_t conf[3]);
+extern "C" int32_t CMPTAcctGetScreenType(CmptScreenType *outType);
+extern "C" int32_t CMPTAcctGetDrcCtrlEnabled(int32_t *outEnabled);
 
 void handleAccountSelection();
 
@@ -181,14 +183,25 @@ static void launchvWiiTitle(uint64_t titleId) {
         diagLog("WPADProbe(%d) = %d (ext %d)", i, rc, ext);
     }
 
+    // Log the persisted screen type / drc ctrl settings before changing them
+    CmptScreenType curType = (CmptScreenType) 0;
+    rc                     = CMPTAcctGetScreenType(&curType);
+    diagLog("CMPTAcctGetScreenType() = %d (type %d)", rc, curType);
+    int32_t drcCtrl = -1;
+    rc              = CMPTAcctGetDrcCtrlEnabled(&drcCtrl);
+    diagLog("CMPTAcctGetDrcCtrlEnabled() = %d (enabled %d)", rc, drcCtrl);
+
     // Try to find a screen type that works
-    if (!isGamePadAttached()) {
+    bool gamePadAttached = isGamePadAttached();
+    if (!gamePadAttached) {
         // CMPTCheckScreenState only checks the video output configuration, so
         // it accepts CMPT_SCREEN_TYPE_BOTH even without a GamePad attached,
         // which freezes the console on launch. Force TV-only in that case.
         DEBUG_FUNCTION_LINE("No GamePad attached, using CMPT_SCREEN_TYPE_TV");
         rc = CMPTAcctSetScreenType(CMPT_SCREEN_TYPE_TV);
         diagLog("CMPTAcctSetScreenType(TV) = %d", rc);
+        rc = CMPTAcctGetScreenType(&curType);
+        diagLog("CMPTAcctGetScreenType() after set = %d (type %d)", rc, curType);
         rc = CMPTAcctSetDrcCtrlEnabled(0);
         diagLog("CMPTAcctSetDrcCtrlEnabled(0) = %d", rc);
         rc = CMPTCheckScreenState();
@@ -231,6 +244,25 @@ static void launchvWiiTitle(uint64_t titleId) {
         rc = CMPTLaunchTitle(dataBuffer, dataSize, titleId);
     }
     diagLog("CMPTLaunch returned %d", rc);
+
+    // Diagnostics bisection: if the TV-only launch failed, retry with the
+    // other screen types to narrow down which value CMPT rejects. A
+    // succeeding retry will hang vWii on a grey screen without a GamePad -
+    // that hang is the expected "success" signal here.
+    if (rc < 0 && !gamePadAttached) {
+        rc = CMPTAcctSetScreenType(CMPT_SCREEN_TYPE_DRC);
+        diagLog("bisect: CMPTAcctSetScreenType(DRC) = %d", rc);
+        diagLog("bisect: calling CMPTLaunch with DRC");
+        rc = titleId == 0 ? CMPTLaunchMenu(dataBuffer, dataSize) : CMPTLaunchTitle(dataBuffer, dataSize, titleId);
+        diagLog("bisect: CMPTLaunch with DRC returned %d", rc);
+        if (rc < 0) {
+            rc = CMPTAcctSetScreenType(CMPT_SCREEN_TYPE_BOTH);
+            diagLog("bisect: CMPTAcctSetScreenType(BOTH) = %d", rc);
+            diagLog("bisect: calling CMPTLaunch with BOTH");
+            rc = titleId == 0 ? CMPTLaunchMenu(dataBuffer, dataSize) : CMPTLaunchTitle(dataBuffer, dataSize, titleId);
+            diagLog("bisect: CMPTLaunch with BOTH returned %d", rc);
+        }
+    }
 
     free(dataBuffer);
 }
