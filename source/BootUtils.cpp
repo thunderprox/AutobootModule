@@ -230,11 +230,12 @@ static void launchvWiiTitle(uint64_t titleId) {
     // is still searching for the GamePad after a cold boot. Probe the DRC
     // state while waiting to see if/when the subsystem settles.
     if (!gamePadAttached) {
-        for (int32_t i = 0; i < 10; i++) {
+        OSTime waitEnd = OSGetSystemTime() + OSMillisecondsToTicks(120000);
+        for (int32_t i = 0; OSGetSystemTime() < waitEnd; i++) {
             CCRCDCDrcState drcState = {};
             int32_t src             = CCRCDCSysGetDrcState(CCR_CDC_DESTINATION_DRC0, &drcState);
             diagLog("wait %d: CCRCDCSysGetDrcState(DRC0) = %d (state %d)", i, src, drcState.state);
-            OSSleepTicks(OSMillisecondsToTicks(3000));
+            OSSleepTicks(OSMillisecondsToTicks(6000));
         }
         int32_t pingRc = CCRCDCDevicePing(CCR_CDC_DESTINATION_DRH);
         diagLog("CCRCDCDevicePing(DRH) = %d", pingRc);
